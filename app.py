@@ -35,6 +35,6 @@ if st.button('开始扫描', type="primary"):
         st.dataframe(pd.DataFrame(results).style.applymap(lambda v: 'background-color: #d1e7dd' if '强势' in v else '', subset=['状态']))
 
 
-pip install streamlit yfinance pandas
+
 
 
