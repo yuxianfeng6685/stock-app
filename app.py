@@ -1,105 +1,116 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-# --- 页面设置 ---
-st.set_page_config(page_title="美股猎手 v2.0", page_icon="⚡", layout="wide")
-st.title('⚡ 美股猎手 v2.0 (Trend Hunter)')
-st.markdown("不用一个个输代码，直接点击下方按钮扫描核心资产！")
+# --- 1. 页面配置 ---
+st.set_page_config(page_title="美股全能操盘手 v4.0", page_icon="💻", layout="wide")
+st.title('💻 美股全能操盘手 v4.0 (Pro Dashboard)')
 
-# --- 侧边栏：控制台 ---
-st.sidebar.header("🎯 扫描目标设置")
+# --- 2. 侧边栏：股票选择 ---
+st.sidebar.header("🔍 股票选择")
 
-# 预设的纳指100成分股 (这里列出了主要的科技成长股)
-nasdaq_100 = "NVDA MSFT AAPL AMZN META GOOGL TSLA AVGO COST PEP CSCO TMUS AMD INTC QCOM TXN AMGN HON AMAT SBUX GILD INTU MDLZ ADP ISRG BKNG VRTX REGN ADI KLAC PANW SNPS LRCX CDNS CHTR MELI MAR NXPI ORLY CTAS FTNT PCAR DXCM KDP PAYX MCHP AEP LULU ADSK IDXX AZN ROST MRVL ODFL MNST CSX FAST EXC BIIB CCEP CTES DLTR DXCM EA EBAY ENPH EXC EXPD FAST FISV FTNT GFS GILD GILD GOOG HON IDXX ILMN INTU ISRG JD KDP KHC KLAC LCID LRCX LULU MAR MCHP MDLZ MELI META MNST MRVL MSFT MU NFLX NVDA NXPI ODFL ORLY PANW PAYX PCAR PDD PEP PYPL QCOM REGN RIVN ROST SBUX SGEN SIRI SNPS SPLK TEAM TMUS TSLA TXN VRSK VRTX WBA WBD WDAY XCEL ZM"
+# 预设股票池
+default_tickers = ["NVDA", "TSLA", "AMD", "AAPL", "MSFT", "META", "AMZN", "GOOGL", "COIN", "MSTR", "MARA", "SMCI", "PLTR"]
+ticker = st.sidebar.selectbox("选择你要分析的股票", default_tickers)
 
-# 按钮：快速填充
-if st.sidebar.button("⚡ 加载“纳指100”成分股"):
-    st.session_state.tickers = nasdaq_100
+# 时间范围
+period = st.sidebar.selectbox("时间范围", ["3mo", "6mo", "1y", "ytd"], index=1)
 
-# 获取用户输入 (如果没有点击按钮，就用默认的)
-if 'tickers' not in st.session_state:
-    st.session_state.tickers = "NVDA TSLA AMD PLTR MSTR COIN MARA SMCI"
-
-tickers_input = st.sidebar.text_area("股票池 (可手动修改)", st.session_state.tickers, height=150)
-tickers_list = list(set(tickers_input.upper().split())) # 去重+转大写
-
-# --- 核心分析逻辑 ---
-def analyze_stock(ticker):
-    try:
-        # 获取数据（只取最近3个月以加快速度）
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period="3mo")
-        
-        if len(hist) < 50: return None
-
-        # 计算指标
-        current_price = hist['Close'].iloc[-1]
-        prev_close = hist['Close'].iloc[-2]
-        ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-        ma50 = hist['Close'].rolling(window=50).mean().iloc[-1]
-        vol = hist['Volume'].iloc[-1]
-        avg_vol = hist['Volume'].rolling(window=20).mean().iloc[-1]
-        
-        # 涨跌幅
-        change_pct = ((current_price - prev_close) / prev_close) * 100
-        
-        # 判断状态
-        trend = "🥶 弱势"
-        score = 0
-        
-        if current_price > ma20: 
-            score += 1
-        if ma20 > ma50: 
-            score += 1
-        if vol > avg_vol * 1.5: # 放量
-            score += 1
-            
-        if score == 3: trend = "🚀 强势爆发"
-        elif score == 2: trend = "🔥 上升趋势"
-        elif score == 1: trend = "👀 观察"
-            
-        return {
-            "代码": ticker,
-            "现价": current_price,
-            "涨跌幅%": round(change_pct, 2),
-            "状态": trend,
-            "成交量放大": "✅ 是" if vol > avg_vol * 1.2 else "平稳"
-        }
-    except:
-        return None
-
-# --- 执行扫描 ---
-if st.button('🚀 开始全量扫描', type="primary"):
-    st.write(f"正在分析 {len(tickers_list)} 只股票，可能会花 1-2 分钟，请耐心等待...")
-    my_bar = st.progress(0)
-    results = []
+# --- 3. 获取数据与计算指标 ---
+def get_data(ticker, period):
+    stock = yf.Ticker(ticker)
+    df = stock.history(period=period)
     
-    # 循环抓取
-    for i, ticker in enumerate(tickers_list):
-        data = analyze_stock(ticker)
-        if data:
-            results.append(data)
-        # 更新进度条
-        my_bar.progress((i + 1) / len(tickers_list))
-        
-    # 展示结果
-    if results:
-        df = pd.DataFrame(results)
-        
-        # 样式美化：高亮强势股
-        def color_trend(val):
-            color = 'black'
-            if '🚀' in val: color = 'green'
-            elif '🔥' in val: color = 'orange'
-            elif '🥶' in val: color = 'gray'
-            return f'color: {color}; font-weight: bold'
+    # 简单的移动平均线
+    df['MA20'] = df['Close'].rolling(window=20).mean()
+    df['MA50'] = df['Close'].rolling(window=50).mean()
+    
+    # 布林带 (Bollinger Bands)
+    df['std'] = df['Close'].rolling(window=20).std()
+    df['Upper_BB'] = df['MA20'] + (2 * df['std'])
+    df['Lower_BB'] = df['MA20'] - (2 * df['std'])
+    
+    # MACD 指标
+    short_ema = df['Close'].ewm(span=12, adjust=False).mean()
+    long_ema = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = short_ema - long_ema
+    df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    
+    # RSI 指标
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    return df, stock.info
 
-        st.success("扫描完成！")
-        st.dataframe(
-            df.sort_values(by="涨跌幅%", ascending=False).style.applymap(color_trend, subset=['状态']),
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.error("没有获取到数据，请检查网络或股票代码。")
+try:
+    df, info = get_data(ticker, period)
+    current_price = df['Close'].iloc[-1]
+    last_close = df['Close'].iloc[-2]
+    change = current_price - last_close
+    pct_change = (change / last_close) * 100
+
+    # --- 4. 顶部核心数据栏 ---
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("当前价格", f"${current_price:.2f}", f"{pct_change:.2f}%")
+    col2.metric("RSI (强弱指标)", f"{df['RSI'].iloc[-1]:.1f}", "超买>70 | 超卖<30")
+    
+    # 计算技术评分 (0-10分)
+    score = 0
+    if current_price > df['MA20'].iloc[-1]: score += 2
+    if df['MA20'].iloc[-1] > df['MA50'].iloc[-1]: score += 2
+    if df['RSI'].iloc[-1] > 50: score += 2
+    if df['MACD'].iloc[-1] > df['Signal_Line'].iloc[-1]: score += 2
+    if current_price > df['Upper_BB'].iloc[-1]: score += 2 # 突破布林上轨
+    
+    status_color = "red" if score < 4 else "green" if score > 6 else "orange"
+    status_text = "🐻 空头主导" if score < 4 else "🐮 多头强势" if score > 6 else "⚖️ 震荡整理"
+    
+    col3.metric("技术评分 (0-10)", f"{score} 分", status_text)
+    col4.metric("成交量", f"{df['Volume'].iloc[-1]/1000000:.1f} M")
+
+    # --- 5. 绘制专业 K 线图 (Plotly) ---
+    st.subheader(f"📈 {ticker} 专业走势图")
+    
+    # 创建子图：上面是K线，下面是MACD
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                        vertical_spacing=0.05, row_heights=[0.7, 0.3])
+
+    # 1. K线图
+    fig.add_trace(go.Candlestick(x=df.index,
+                    open=df['Open'], high=df['High'],
+                    low=df['Low'], close=df['Close'], name='K线'), row=1, col=1)
+
+    # 2. 均线 MA20
+    fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1), name='MA20'), row=1, col=1)
+    
+    # 3. 布林带
+    fig.add_trace(go.Scatter(x=df.index, y=df['Upper_BB'], line=dict(color='gray', width=1, dash='dot'), name='布林上轨'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['Lower_BB'], line=dict(color='gray', width=1, dash='dot'), name='布林下轨'), row=1, col=1)
+
+    # 4. MACD
+    fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='blue', width=1), name='MACD'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['Signal_Line'], line=dict(color='orange', width=1), name='Signal'), row=2, col=1)
+    
+    # 颜色条 (Histogram)
+    colors = ['green' if val >= 0 else 'red' for val in (df['MACD'] - df['Signal_Line'])]
+    fig.add_trace(go.Bar(x=df.index, y=(df['MACD'] - df['Signal_Line']), marker_color=colors, name='动能柱'), row=2, col=1)
+
+    # 布局美化
+    fig.update_layout(height=600, xaxis_rangeslider_visible=False, title_text=f"{ticker} 详细技术分析")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- 6. AI 极简分析结论 ---
+    st.info(f"""
+    🤖 **AI 自动复盘：**
+    * **趋势判断：** 当前价格在 20日均线 {'之上 🔼' if current_price > df['MA20'].iloc[-1] else '之下 🔽'}。
+    * **动能指标：** RSI 为 {df['RSI'].iloc[-1]:.1f}，MACD {'金叉 (看涨)' if df['MACD'].iloc[-1] > df['Signal_Line'].iloc[-1] else '死叉 (看跌)'}。
+    * **操作建议：** {"🔥 **多头排列，适合持股待涨**" if score >= 8 else "⚠️ **趋势走弱，注意风险**" if score <= 3 else "👀 **震荡行情，建议观望**"}
+    """)
+
+except Exception as e:
+    st.error(f"无法获取数据，请检查代码是否正确或稍后再试。错误信息: {e}")
