@@ -4,100 +4,147 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# --- 1. 页面配置 ---
-st.set_page_config(page_title="美股全能操盘手 v4.1", page_icon="🛡️", layout="wide")
-st.title('🛡️ 美股全能操盘手 v4.1 (防封版)')
+# --- 1. 页面设置 ---
+st.set_page_config(page_title="美股雷达 v5.0", page_icon="📡", layout="wide")
+st.title('📡 美股雷达 v5.0 (智能选股版)')
 
-# --- 2. 侧边栏 ---
-st.sidebar.header("🔍 股票选择")
-default_tickers = ["NVDA", "TSLA", "AMD", "AAPL", "MSFT", "META", "AMZN", "GOOGL", "COIN", "MSTR", "SMCI", "PLTR"]
-ticker = st.sidebar.selectbox("选择股票", default_tickers)
-period = st.sidebar.selectbox("时间范围", ["3mo", "6mo", "1y", "ytd"], index=1)
+# --- 2. 侧边栏：超级选股器 ---
+st.sidebar.header("1. 选择战场 (板块)")
 
-# --- 3. 核心升级：增加缓存功能 ---
-# @st.cache_data 意味着：如果下载过这个股票的数据，就直接用内存里的，别去骚扰雅虎
-@st.cache_data(ttl=3600) 
-def get_data_cached(ticker, period):
-    stock = yf.Ticker(ticker)
-    df = stock.history(period=period)
-    
-    if len(df) == 0:
-        return pd.DataFrame(), None # 防止空数据报错
+# 定义热门板块的股票池
+sectors = {
+    "👑 科技七巨头 (Mag 7)": ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META"],
+    "🤖 AI 与芯片": ["AMD", "AVGO", "TSM", "INTC", "QCOM", "MU", "SMCI", "ARM", "ASML"],
+    "💰 加密货币概念": ["MSTR", "COIN", "MARA", "RIOT", "CLSK", "HOOD"],
+    "🐼 热门中概股": ["BABA", "PDD", "JD", "BIDU", "NIO", "XPEV", "LI", "BILI"],
+    "☁️ SaaS 与软件": ["PLTR", "CRM", "ADBE", "SNOW", "DDOG", "NET", "PANW", "CRWD"],
+    "💊 减肥药与医疗": ["LLY", "NVO", "PFE", "MRK", "JNJ", "ABBV"]
+}
 
-    # 计算指标
-    df['MA20'] = df['Close'].rolling(window=20).mean()
-    df['MA50'] = df['Close'].rolling(window=50).mean()
-    
-    # 布林带
-    df['std'] = df['Close'].rolling(window=20).std()
-    df['Upper_BB'] = df['MA20'] + (2 * df['std'])
-    df['Lower_BB'] = df['MA20'] - (2 * df['std'])
-    
-    # MACD
-    short_ema = df['Close'].ewm(span=12, adjust=False).mean()
-    long_ema = df['Close'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = short_ema - long_ema
-    df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    
-    # RSI
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    
-    return df, stock.info
+# 下拉菜单选择板块
+selected_sector = st.sidebar.selectbox("你想扫描哪个板块？", list(sectors.keys()))
+tickers_to_scan = sectors[selected_sector]
 
-# --- 4. 展示逻辑 ---
-try:
-    df, info = get_data_cached(ticker, period)
+st.sidebar.header("2. 猎杀条件 (过滤)")
+show_only_oversold = st.sidebar.checkbox("只显示超卖 (RSI < 35)", value=False)
+show_only_bullish = st.sidebar.checkbox("只显示强势 (价格 > 20日线)", value=False)
+
+# --- 3. 核心计算 (带缓存) ---
+@st.cache_data(ttl=1800) # 缓存30分钟，避免重复请求
+def scan_market(ticker_list):
+    results = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    if df.empty:
-        st.warning("⚠️ 暂时无法获取数据，请稍后刷新重试（可能是雅虎接口繁忙）。")
+    for i, ticker in enumerate(ticker_list):
+        status_text.text(f"正在雷达扫描: {ticker} ...")
+        try:
+            stock = yf.Ticker(ticker)
+            # 只取最近3个月数据，速度最快
+            hist = stock.history(period="3mo")
+            
+            if len(hist) > 20:
+                # 基础数据
+                curr_price = hist['Close'].iloc[-1]
+                prev_price = hist['Close'].iloc[-2]
+                pct_change = ((curr_price - prev_price) / prev_price) * 100
+                vol = hist['Volume'].iloc[-1] / 1000000 # 换算成百万
+                
+                # 技术指标
+                ma20 = hist['Close'].rolling(20).mean().iloc[-1]
+                
+                # RSI 计算
+                delta = hist['Close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+                rs = gain / loss
+                rsi = 100 - (100 / (1 + rs))
+                rsi_val = rsi.iloc[-1]
+                
+                # 判断信号
+                signal = "😐 震荡"
+                score = 0
+                if rsi_val < 30: 
+                    signal = "💎 黄金坑 (超卖)"
+                    score = 2 # 抄底分高
+                elif rsi_val > 70: 
+                    signal = "🔥 极度过热"
+                    score = -1
+                elif curr_price > ma20:
+                    signal = "📈 趋势向上"
+                    score = 1
+                
+                results.append({
+                    "代码": ticker,
+                    "现价": round(curr_price, 2),
+                    "涨跌幅%": round(pct_change, 2),
+                    "RSI": round(rsi_val, 1),
+                    "状态": signal,
+                    "MA20": ma20, # 用于后台过滤
+                    "成交量(M)": round(vol, 1)
+                })
+        except:
+            pass
+        progress_bar.progress((i + 1) / len(ticker_list))
+        
+    status_text.empty()
+    progress_bar.empty()
+    return pd.DataFrame(results)
+
+# --- 4. 执行逻辑 ---
+if st.button("📡 启动雷达扫描", type="primary"):
+    df = scan_market(tickers_to_scan)
+    
+    if not df.empty:
+        # --- 智能过滤逻辑 ---
+        final_df = df.copy()
+        
+        if show_only_oversold:
+            final_df = final_df[final_df['RSI'] < 35]
+            st.warning("已开启过滤：只显示 RSI < 35 的超卖股票")
+            
+        if show_only_bullish:
+            final_df = final_df[final_df['现价'] > final_df['MA20']]
+            st.success("已开启过滤：只显示站上 20日均线 的强势股")
+
+        # --- 展示结果 ---
+        if final_df.empty:
+            st.info("扫描完成，但没有股票符合你当前的过滤条件。试试取消勾选侧边栏的过滤框。")
+        else:
+            # 颜色美化
+            def highlight_row(val):
+                color = ''
+                if '黄金坑' in str(val): color = 'background-color: #d4edda; color: green'
+                elif '过热' in str(val): color = 'background-color: #f8d7da; color: red'
+                return color
+
+            st.write(f"### 🎯 扫描结果 ({len(final_df)} 只)")
+            
+            # 显示表格
+            st.dataframe(
+                final_df.drop(columns=['MA20']).sort_values(by="涨跌幅%", ascending=False).style.applymap(highlight_row, subset=['状态']),
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # 简单的气泡图 (X轴=RSI, Y轴=涨跌幅)
+            st.write("### 📊 市场情绪分布图")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=final_df['RSI'],
+                y=final_df['涨跌幅%'],
+                mode='markers+text',
+                text=final_df['代码'],
+                textposition="top center",
+                marker=dict(size=12, color=final_df['RSI'], colorscale='RdYlGn_r', showscale=True)
+            ))
+            fig.add_vline(x=30, line_dash="dash", line_color="green", annotation_text="超卖区")
+            fig.add_vline(x=70, line_dash="dash", line_color="red", annotation_text="超买区")
+            fig.update_layout(xaxis_title="RSI (强弱指标)", yaxis_title="今日涨跌幅 (%)", height=500)
+            st.plotly_chart(fig, use_container_width=True)
+            
     else:
-        current_price = df['Close'].iloc[-1]
-        last_close = df['Close'].iloc[-2]
-        change = current_price - last_close
-        pct_change = (change / last_close) * 100
+        st.error("无法获取数据，请稍后重试。")
 
-        # 数据看板
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("当前价格", f"${current_price:.2f}", f"{pct_change:.2f}%")
-        col2.metric("RSI", f"{df['RSI'].iloc[-1]:.1f}", "强弱指标")
-        
-        # 评分系统
-        score = 0
-        if current_price > df['MA20'].iloc[-1]: score += 2
-        if df['MA20'].iloc[-1] > df['MA50'].iloc[-1]: score += 2
-        if df['RSI'].iloc[-1] > 50: score += 2
-        if df['MACD'].iloc[-1] > df['Signal_Line'].iloc[-1]: score += 2
-        if current_price > df['Upper_BB'].iloc[-1]: score += 2
-        
-        status_text = "🐻 空头" if score < 4 else "🐮 多头" if score > 6 else "⚖️ 震荡"
-        col3.metric("技术评分", f"{score}/10", status_text)
-        col4.metric("成交量", f"{df['Volume'].iloc[-1]/1000000:.1f} M")
-
-        # 画图
-        st.subheader(f"📈 {ticker} 走势图")
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-        
-        # K线
-        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'],
-                        low=df['Low'], close=df['Close'], name='K线'), row=1, col=1)
-        # 均线
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1), name='MA20'), row=1, col=1)
-        # 布林带
-        fig.add_trace(go.Scatter(x=df.index, y=df['Upper_BB'], line=dict(color='gray', width=1, dash='dot'), name='上轨'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['Lower_BB'], line=dict(color='gray', width=1, dash='dot'), name='下轨'), row=1, col=1)
-        # MACD
-        fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='blue', width=1), name='MACD'), row=2, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['Signal_Line'], line=dict(color='orange', width=1), name='Signal'), row=2, col=1)
-        colors = ['green' if val >= 0 else 'red' for val in (df['MACD'] - df['Signal_Line'])]
-        fig.add_trace(go.Bar(x=df.index, y=(df['MACD'] - df['Signal_Line']), marker_color=colors, name='动能'), row=2, col=1)
-        
-        fig.update_layout(height=600, xaxis_rangeslider_visible=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-except Exception as e:
-    st.error(f"出了点小问题：{e}")
-    st.info("💡 提示：如果显示 Rate limited，请等待 15 分钟再刷新。")
+else:
+    st.info("👈 请在左侧选择一个板块，然后点击上面的按钮开始扫描！")
